@@ -24,7 +24,17 @@
     <h1>Hello, I’m Mehdi.</h1>
     <p>Welcome to my website. This is a simple starting point for sharing my projects, ideas, and things I’m learning.</p>
     <a href="https://github.com/mshadkhah">Find me on GitHub &rarr;</a>
-    <footer>More coming soon.</footer>
+    <footer>More coming soon. <a href="admin.html">Private dashboard ↗</a></footer>
   </main>
+<!-- Cloudflare Web Analytics: track the published site, not local previews. -->
+<script>
+if (window.location.hostname === 'mshadkhah.github.io') {
+  const beacon = document.createElement('script');
+  beacon.type = 'module';
+  beacon.src = 'https://static.cloudflareinsights.com/beacon.min.js';
+  beacon.setAttribute('data-cf-beacon', JSON.stringify({token: '1682472e90c14d3bb1f4f0f3ceb6cb70'}));
+  document.body.appendChild(beacon);
+}
+</script>
 </body>
 </html>
