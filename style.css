@@ -36,3 +36,33 @@ html{overflow-anchor:none;scroll-behavior:auto}.page{animation:none}
 .about-biography>p:not(.lead){font-size:14px;line-height:1.9;color:var(--muted);margin:18px 0}.about-biography a{color:var(--gold);text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:4px}.about-biography a:hover{text-decoration-thickness:2px}@media(max-width:740px){.about-biography>p:not(.lead){font-size:13px}}
 
 .papers .paper-link{display:inline-block;font-size:12px;color:var(--gold);margin-top:3px}.papers h3 a:hover,.papers .paper-link:hover{text-decoration:underline;text-underline-offset:4px}.papers article>div{min-width:0}
+
+/* Consistent profile and contact icons. */
+.icon{flex:0 0 36px;height:39px;background:rgba(230,195,132,.035)}
+.icon svg{display:block;width:21px;height:21px}
+.details li>div{min-width:0}
+.details a{overflow-wrap:anywhere}
+.social{flex-wrap:wrap;gap:10px 16px}
+.social a{display:inline-flex;align-items:center;gap:6px;min-height:32px}
+.social svg{width:16px;height:16px;flex-shrink:0;color:var(--gold)}
+.contact-links a{display:flex;align-items:center;gap:18px;transition:border-color .2s,background .2s}
+.contact-links a:hover{border-color:var(--gold)}
+.contact-links a>div{min-width:0;overflow-wrap:anywhere}
+.contact-links .contact-icon{display:grid;place-items:center;width:48px;height:48px;flex:0 0 48px;border:1px solid var(--border);border-radius:12px;color:var(--gold)}
+.contact-icon svg{width:25px;height:25px}
+.contact-links b{float:none;margin-left:auto}
+@media(max-width:1000px){.social{gap:6px 12px}}
+@media(max-width:740px){.social{gap:4px 12px}.social svg{width:14px;height:14px}.contact-links a{padding:18px 14px;gap:12px;font-size:17px}.contact-links .contact-icon{width:38px;height:38px;flex-basis:38px}.contact-icon svg{width:21px;height:21px}.contact-links span{font-size:8px;letter-spacing:1px}}
+/* Selected software and research projects. */
+.selected-work{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+.selected-project{min-width:0;padding:0;text-align:left;border:1px solid var(--border);border-radius:14px;overflow:hidden;background:rgba(128,151,162,.04);display:flex;flex-direction:column;transition:border-color .2s}
+.selected-project:hover{border-color:var(--gold)}
+.selected-image{height:190px;padding:16px;background:#fff;display:flex;align-items:center;justify-content:center}
+.selected-image img{display:block;width:100%;height:100%;object-fit:contain}
+.selected-copy{padding:23px;display:flex;flex-direction:column;flex:1}
+.selected-copy small{font-size:9px;letter-spacing:1.5px;color:var(--gold)}
+.selected-copy h4{font-size:25px;font-weight:500;margin:10px 0}
+.selected-copy h4 span{float:right;color:var(--gold);font-size:20px}
+.selected-copy p{font-size:13px;line-height:1.8;color:var(--muted);margin:0 0 20px}
+.selected-copy>.gold{margin-top:auto}
+@media(max-width:740px){.selected-work{grid-template-columns:1fr}.selected-image{height:210px}.selected-copy{padding:20px}}

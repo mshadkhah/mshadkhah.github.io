@@ -26,7 +26,7 @@ if(location.hash){const url=new URL(location.href);url.searchParams.set('section
 
 const canvas=document.getElementById('water'),motion=document.getElementById('motion'),dropButton=document.getElementById('drop');
 const gl=canvas.getContext('webgl',{alpha:false,antialias:false,powerPreference:'low-power'});
-let paused=matchMedia('(prefers-reduced-motion: reduce)').matches;
+let paused=false;
 function syncMotion(){motion.textContent=paused?'▶':'Ⅱ';motion.setAttribute('aria-pressed',String(paused));motion.setAttribute('aria-label',paused?'Resume water animation':'Pause water animation');}
 syncMotion();
 if(gl){
