@@ -2,7 +2,6 @@
 (() => {
   const $ = id => document.getElementById(id);
   const offline = location.hostname === '127.0.0.1' && location.port === '8001';
-  const assetBase = offline ? '/.local-tools' : '/tools/assets';
   const isAppleMobile = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   const engine = $('reader-engine');
   const aiVoiceOptions = $('reader-voice').innerHTML;
@@ -85,31 +84,44 @@
   $('reader-camera').addEventListener('change', loadImage);
   $('reader-camera-button').addEventListener('click', () => $('reader-camera').click());
   $('reader-extract').addEventListener('click', async () => {
-    const run = ++token; busy = true; controls(); resetAudio(); report('Starting local English OCR…');
+    const run = ++token; busy = true; controls(); resetAudio(); report('Loading PaddleOCR… First use downloads the text models.');
+    let worker;
     try {
-      if (!window.Tesseract) {
-        await new Promise((resolve,reject) => {
-          const script = document.createElement('script'); script.src = `${assetBase}/ocr/tesseract.min.js`;
-          script.onload = resolve; script.onerror = () => { script.remove(); reject(Error('Could not load OCR. Check your connection and try again.')); }; document.head.append(script);
-        });
-      }
+      const { PaddleOCR } = await import('/tools/assets/paddle/paddle.mjs');
       if (run !== token) return;
-      const worker = await Tesseract.createWorker('eng', 1, {
-        workerPath:`${assetBase}/ocr/worker.min.js`, corePath:`${assetBase}/ocr/tesseract-core-lstm.wasm.js`,
-        langPath:`${assetBase}/ocr`, workerBlobURL:false,
-        logger: info => { if (run === token) report(info.status === 'recognizing text' ? 'Reading text from your image…' : 'Preparing local OCR…', info.progress); }
+      const base = new URL('/tools/assets/paddle/', location.href).href;
+      // The SDK creates its worker lazily, so the error listener is attached inside createWorker.
+      let stopWithError;
+      const failed = new Promise((_, reject) => { stopWithError = reject; });
+      failed.catch(() => {});
+      const ocr = await PaddleOCR.create({
+        initialize: false,
+        textDetectionModelName: 'PP-OCRv5_mobile_det',
+        textRecognitionModelName: 'PP-OCRv5_mobile_rec',
+        textDetectionModelAsset: {url: base + 'PP-OCRv5_mobile_det.tar'},
+        textRecognitionModelAsset: {url: base + 'PP-OCRv5_mobile_rec.tar'},
+        textRecognitionBatchSize: 1,
+        worker: {createWorker: () => {
+          worker = new Worker(base + 'assets/worker-entry-C9UNuyOJ.js', {type:'module'});
+          ocrWorker = worker;
+          worker.addEventListener('error', () => stopWithError(Error('The OCR worker stopped. Try a smaller photo or close other tabs.')), {once:true});
+          return worker;
+        }},
+        ortOptions: {backend:'wasm', wasmPaths:base, numThreads:1}
       });
-      if (run !== token) { await worker.terminate(); return; }
-      ocrWorker = worker;
-      const result = await worker.recognize(imageBlob);
-      await worker.terminate(); ocrWorker = null;
+      await Promise.race([ocr.initialize(), failed]);
       if (run !== token) return;
-      const extracted = result.data.text.trim();
+      report('Reading text with PaddleOCR…');
+      const [result] = await Promise.race([ocr.predict(imageBlob, {textDetLimitSideLen:1536, textDetLimitType:'max'}), failed]);
+      if (run !== token) return;
+      const extracted = result.items.map(item => item.text).join('\n').trim();
       text.value = extracted.slice(0,6000);
-      finish(!extracted ? 'No text found. Try a sharper image with larger, printed English text.' : extracted.length > 6000 ? 'Text extracted. The first 6,000 characters are shown; use smaller sections for the rest.' : 'Text extracted. Check for recognition mistakes, then create your narration.');
+      finish(!extracted ? 'No text found. Try a sharper photo, with the page filling the frame.' : extracted.length > 6000 ? 'Text extracted. The first 6,000 characters are shown; use smaller sections for the rest.' : 'Text extracted with PaddleOCR. Review the text and reading order before listening.');
     } catch (error) {
-      if (ocrWorker) { await ocrWorker.terminate(); ocrWorker = null; }
       if (run === token) finish('Could not read the image: ' + error.message);
+    } finally {
+      worker?.terminate();
+      if (ocrWorker === worker) ocrWorker = null;
     }
   });
   $('reader-speak').addEventListener('click', () => {
