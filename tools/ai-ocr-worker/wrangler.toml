@@ -2,5 +2,10 @@ name = "mshadkhah-ai-ocr"
 main = "worker.js"
 compatibility_date = "2026-01-01"
 
-# Set the secret once from this folder, never in this file:
+[vars]
+# Public HTTPS address of the Kokoro server on the home machine (Tailscale Funnel). Not secret.
+KOKORO_URL = "https://spark-6082.taild8f391.ts.net"
+
+# Set secrets once from this folder, never in this file:
 #   npx wrangler secret put ANTHROPIC_API_KEY
+#   npx wrangler secret put KOKORO_TOKEN

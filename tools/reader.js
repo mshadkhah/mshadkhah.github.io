@@ -147,9 +147,14 @@
       if (ocrWorker === worker) ocrWorker = null;
     }
   });
-  $('reader-speak').addEventListener('click', () => {
-    const content = text.value.trim(); if (!content || content.length > 6000) return;
-    if (engine.value === 'device') { startDevice(content); return; }
+  async function speakOnServer(content) {
+    const response = await fetch(AI_OCR_URL + '/speak', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ text: content, voice: $('reader-voice').value, speed: Number($('reader-speed').value) }) });
+    if (!response.ok) throw Error('server ' + response.status);
+    const blob = await response.blob();
+    if (!blob.size) throw Error('empty audio');
+    return blob;
+  }
+  function speakInBrowser(content) {
     busy = true; controls(); resetAudio(); report('Preparing Kokoro… First use may take a little longer.');
     if (!voiceWorker) {
       voiceWorker = new Worker('/tools/reader-worker.js?v=2', {type:'module'});
@@ -166,6 +171,22 @@
       voiceWorker.onerror = () => { voiceWorker.terminate(); voiceWorker = null; finish('Kokoro could not start on this device. Choose Device voice, or try a desktop browser.'); };
     }
     voiceWorker.postMessage({text:content, voice:$('reader-voice').value, speed:Number($('reader-speed').value)});
+  }
+  $('reader-speak').addEventListener('click', async () => {
+    const content = text.value.trim(); if (!content || content.length > 6000) return;
+    if (engine.value === 'device') { startDevice(content); return; }
+    if (AI_OCR_URL) {
+      busy = true; controls(); resetAudio(); report('Creating narration…');
+      try {
+        const blob = await speakOnServer(content);
+        audioURL = URL.createObjectURL(blob); audio.src = audioURL; download.href = audioURL;
+        $('reader-result').hidden = false; finish('Narration ready. Press play to listen, or download the WAV file.');
+        return;
+      } catch (error) {
+        report('Home voice server unavailable; using the in-browser voice…');
+      }
+    }
+    speakInBrowser(content);
   });
   $('reader-stop').addEventListener('click', () => {
     token++; stopDevice(); voiceWorker?.terminate(); voiceWorker = null;

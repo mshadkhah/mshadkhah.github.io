@@ -25,6 +25,26 @@ function json(body, status, headers) {
   return new Response(JSON.stringify(body), { status, headers: { ...headers, 'Content-Type': 'application/json' } });
 }
 
+// /speak forwards narration text to the Kokoro server at home. The Kokoro token stays in this Worker's secrets.
+async function handleSpeak(request, env, headers) {
+  const body = await request.json().catch(() => null);
+  if (!body || typeof body.text !== 'string' || !body.text.trim()) return json({ error: 'Missing text' }, 400, headers);
+  if (body.text.length > 6000) return json({ error: 'Text is too long' }, 413, headers);
+
+  let upstream;
+  try {
+    upstream = await fetch(env.KOKORO_URL + '/speak', {
+      method: 'POST',
+      headers: { 'X-Token': env.KOKORO_TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: body.text, voice: String(body.voice || 'af_heart'), speed: Number(body.speed) || 1 })
+    });
+  } catch (error) {
+    return json({ error: 'Voice server is unreachable.' }, 502, headers);
+  }
+  if (!upstream.ok) return json({ error: 'Voice server returned ' + upstream.status }, 502, headers);
+  return new Response(await upstream.arrayBuffer(), { status: 200, headers: { ...headers, 'Content-Type': 'audio/wav' } });
+}
+
 export default {
   async fetch(request, env) {
     const origin = request.headers.get('Origin') || '';
@@ -33,6 +53,7 @@ export default {
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers });
     if (request.method !== 'POST') return json({ error: 'Method not allowed' }, 405, headers);
     if (!ALLOWED_ORIGINS.includes(origin)) return json({ error: 'Origin not allowed' }, 403, headers);
+    if (new URL(request.url).pathname === '/speak') return handleSpeak(request, env, headers);
 
     const body = await request.json().catch(() => null);
     if (!body || typeof body.image !== 'string' || !body.image.length) return json({ error: 'Missing image' }, 400, headers);
@@ -63,7 +84,11 @@ export default {
       return json({ error: 'Text extraction is unreachable right now.' }, 502, headers);
     }
 
-    if (!upstream.ok) return json({ error: 'Text extraction service returned an error.' }, 502, headers);
+    if (!upstream.ok) {
+      // Pass Anthropic's own message through (it never contains the key) so failures are diagnosable.
+      const detail = (await upstream.text().catch(() => '')).slice(0, 300);
+      return json({ error: `Anthropic returned ${upstream.status}: ${detail}` }, 502, headers);
+    }
 
     const data = await upstream.json();
     const text = (data.content || []).filter(block => block.type === 'text').map(block => block.text).join('\n').trim();
