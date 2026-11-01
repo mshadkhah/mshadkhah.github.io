@@ -28,7 +28,7 @@
     $('reader-extract').disabled = busy || !imageBlob;
     $('reader-speak').disabled = busy || !text.value.trim();
     $('reader-stop').hidden = !busy && !deviceSpeaking;
-    for (const id of ['reader-file','reader-text','reader-voice','reader-speed','reader-engine','reader-example','reader-clear']) $(id).disabled = busy;
+    for (const id of ['reader-file','reader-camera-button','reader-camera','reader-text','reader-voice','reader-speed','reader-engine','reader-example','reader-clear']) $(id).disabled = busy;
     $('reader-count').textContent = `${text.value.length.toLocaleString()} / 6,000 characters`;
     $('reader-card').setAttribute('aria-busy', String(busy));
   }
@@ -49,11 +49,12 @@
     samples.forEach((s,i) => view.setInt16(44 + i * 2, Math.max(-1, Math.min(1,s)) * (s < 0 ? 32768 : 32767), true));
     return new Blob([buffer], {type:'audio/wav'});
   }
-  upload.addEventListener('change', async () => {
-    const file = upload.files[0]; if (!file) return;
+  async function loadImage(event) {
+    const picker = event.currentTarget;
+    const file = picker.files[0]; if (!file) return;
     const run = ++token;
     if (!(file.type.startsWith('image/') || /\.(heic|heif|jpe?g|png|webp|bmp)$/i.test(file.name)) || file.size > 20 * 1024 * 1024) {
-      upload.value = ''; report('Choose a photo or screenshot smaller than 20 MB.'); return;
+      picker.value = ''; report('Choose a photo or screenshot smaller than 20 MB.'); return;
     }
     busy = true; controls(); resetAudio(); report('Opening your photo on this device…');
     let sourceURL;
@@ -78,8 +79,11 @@
       $('reader-filename').textContent = file.name; resetAudio();
       finish('Image ready. Extract the text, then review it before listening.');
     } catch (error) { if (run === token) finish(error.message); }
-    finally { if (sourceURL) URL.revokeObjectURL(sourceURL); upload.value = ''; }
-  });
+    finally { if (sourceURL) URL.revokeObjectURL(sourceURL); picker.value = ''; }
+  }
+  upload.addEventListener('change', loadImage);
+  $('reader-camera').addEventListener('change', loadImage);
+  $('reader-camera-button').addEventListener('click', () => $('reader-camera').click());
   $('reader-extract').addEventListener('click', async () => {
     const run = ++token; busy = true; controls(); resetAudio(); report('Starting local English OCR…');
     try {
@@ -141,7 +145,7 @@
     resetAudio(); controls(); report('Sample text ready. Choose a voice and create narration.');
   });
   $('reader-clear').addEventListener('click', () => {
-    text.value = ''; upload.value = ''; imageBlob = null;
+    text.value = ''; upload.value = ''; $('reader-camera').value = ''; imageBlob = null;
     if (imageURL) URL.revokeObjectURL(imageURL); imageURL = null;
     $('reader-preview').removeAttribute('src'); $('reader-preview').hidden = true; $('reader-filename').textContent = 'Photo Library, camera, or files · up to 20 MB';
     resetAudio(); controls(); report('Ready for an image or pasted text.');
@@ -214,7 +218,7 @@
     token++; stopDevice(); voiceWorker?.terminate(); ocrWorker?.terminate();
     voiceWorker = ocrWorker = null; imageBlob = null;
     if (imageURL) URL.revokeObjectURL(imageURL);
-    resetAudio(); text.value = ''; upload.value = ''; $('reader-preview').removeAttribute('src'); $('reader-preview').hidden = true;
+    resetAudio(); text.value = ''; upload.value = ''; $('reader-camera').value = ''; $('reader-preview').removeAttribute('src'); $('reader-preview').hidden = true;
   });
   window.addEventListener('pageshow', event => { if (event.persisted) { busy = false; controls(); report('Ready for an image or pasted text.'); } });
   controls();

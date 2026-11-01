@@ -16,7 +16,7 @@ The Tools directory includes an English image reader with client-side Tesseract 
 
 ### Phones and deployment
 
-- The native image picker allows photo-library, camera, or file selection. Safari 17+ decodes iPhone HEIC/HEIF; unsupported formats show a JPEG/screenshot fallback message.
+- The native image picker allows photo-library, camera, or file selection. A dedicated Take a photo button uses capture="environment" to request the rear camera on supported phones; desktop browsers may show a file picker instead. Safari 17+ decodes iPhone HEIC/HEIF; unsupported formats show a JPEG/screenshot fallback message.
 - Images up to 20 MB are resized before OCR (1,800 px on iPhone/iPad, 2,400 px elsewhere); narration is limited to 6,000 characters.
 - iPhone/iPad defaults to installed local English voices via SpeechSynthesis. Only voices marked localService are offered. Kokoro is optional; its large memory requirement may exceed mobile browser limits.
 - Kokoro downloads a pinned ~88 MiB q8 model from Hugging Face on first use. Text and inference stay on device. All other runtimes, OCR data, and four Kokoro voices are self-hosted under tools/assets.
