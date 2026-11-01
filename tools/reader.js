@@ -1,0 +1,221 @@
+'use strict';
+(() => {
+  const $ = id => document.getElementById(id);
+  const offline = location.hostname === '127.0.0.1' && location.port === '8001';
+  const assetBase = offline ? '/.local-tools' : '/tools/assets';
+  const isAppleMobile = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const engine = $('reader-engine');
+  const aiVoiceOptions = $('reader-voice').innerHTML;
+  let localVoices = [], deviceSpeaking = false, deviceRun = 0, utterance;
+  const upload = $('reader-file'), text = $('reader-text'), status = $('reader-status');
+  $('tools-open-reader').addEventListener('click', () => {
+    $('tools-directory').hidden = true; $('tools-reader-detail').hidden = false;
+    $('tools-back').focus();
+  });
+  $('tools-back').addEventListener('click', () => {
+    $('reader-audio').pause(); stopDevice(); controls();
+    $('tools-reader-detail').hidden = true; $('tools-directory').hidden = false;
+    $('tools-open-reader').focus();
+  });
+  const audio = $('reader-audio'), download = $('reader-download'), progress = $('reader-progress');
+  let busy = false, imageURL, audioURL, imageBlob, voiceWorker, ocrWorker, token = 0;
+  function report(message, value) {
+    status.textContent = message;
+    progress.hidden = !busy;
+    if (value === undefined) progress.removeAttribute('value'); else progress.value = value;
+  }
+  function controls() {
+    $('reader-extract').disabled = busy || !imageBlob;
+    $('reader-speak').disabled = busy || !text.value.trim();
+    $('reader-stop').hidden = !busy && !deviceSpeaking;
+    for (const id of ['reader-file','reader-text','reader-voice','reader-speed','reader-engine','reader-example','reader-clear']) $(id).disabled = busy;
+    $('reader-count').textContent = `${text.value.length.toLocaleString()} / 6,000 characters`;
+    $('reader-card').setAttribute('aria-busy', String(busy));
+  }
+  function finish(message) { busy = false; controls(); report(message); }
+  function resetAudio() {
+    stopDevice(); audio.pause(); audio.removeAttribute('src'); audio.load();
+    if (audioURL) URL.revokeObjectURL(audioURL);
+    audioURL = null; $('reader-result').hidden = true;
+    download.removeAttribute('href'); audio.hidden = false; download.hidden = false; $('reader-play').textContent = 'Play narration';
+  }
+  function wav(samples, rate) {
+    const buffer = new ArrayBuffer(44 + samples.length * 2), view = new DataView(buffer);
+    const str = (at, value) => [...value].forEach((c, i) => view.setUint8(at + i, c.charCodeAt(0)));
+    str(0,'RIFF'); view.setUint32(4,36 + samples.length * 2,true); str(8,'WAVE'); str(12,'fmt ');
+    view.setUint32(16,16,true); view.setUint16(20,1,true); view.setUint16(22,1,true);
+    view.setUint32(24,rate,true); view.setUint32(28,rate * 2,true); view.setUint16(32,2,true); view.setUint16(34,16,true);
+    str(36,'data'); view.setUint32(40,samples.length * 2,true);
+    samples.forEach((s,i) => view.setInt16(44 + i * 2, Math.max(-1, Math.min(1,s)) * (s < 0 ? 32768 : 32767), true));
+    return new Blob([buffer], {type:'audio/wav'});
+  }
+  upload.addEventListener('change', async () => {
+    const file = upload.files[0]; if (!file) return;
+    const run = ++token;
+    if (!(file.type.startsWith('image/') || /\.(heic|heif|jpe?g|png|webp|bmp)$/i.test(file.name)) || file.size > 20 * 1024 * 1024) {
+      upload.value = ''; report('Choose a photo or screenshot smaller than 20 MB.'); return;
+    }
+    busy = true; controls(); resetAudio(); report('Opening your photo on this device…');
+    let sourceURL;
+    try {
+      // Safari's native image decoder supports iPhone HEIC and photo orientation.
+      // Draw into a small canvas rather than allocating a full-resolution OCR canvas.
+      sourceURL = URL.createObjectURL(file);
+      const image = new Image();
+      await new Promise((resolve, reject) => { image.onload = resolve; image.onerror = () => reject(Error('This browser cannot open the photo. Try Safari 17 or later for HEIC, or choose a screenshot or JPEG.')); image.src = sourceURL; });
+      if (run !== token) return;
+      if (image.naturalWidth * image.naturalHeight > 100000000) throw Error('This photo is too large. Choose a smaller image or screenshot.');
+      const scale = Math.min(1, (isAppleMobile ? 1800 : 2400) / Math.max(image.naturalWidth, image.naturalHeight));
+      const canvas = document.createElement('canvas'); canvas.width = Math.max(1, Math.round(image.naturalWidth * scale)); canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+      const ctx = canvas.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0,0,canvas.width,canvas.height); ctx.drawImage(image,0,0,canvas.width,canvas.height);
+      const blob = await new Promise(resolve => canvas.toBlob(resolve,'image/png'));
+      canvas.width = canvas.height = 1; image.src = '';
+      if (run !== token) return;
+      if (!blob) throw Error('Could not open this image. Try a PNG or JPEG.');
+      if (imageURL) URL.revokeObjectURL(imageURL);
+      imageBlob = blob; imageURL = URL.createObjectURL(blob); text.value = '';
+      $('reader-preview').src = imageURL; $('reader-preview').hidden = false;
+      $('reader-filename').textContent = file.name; resetAudio();
+      finish('Image ready. Extract the text, then review it before listening.');
+    } catch (error) { if (run === token) finish(error.message); }
+    finally { if (sourceURL) URL.revokeObjectURL(sourceURL); upload.value = ''; }
+  });
+  $('reader-extract').addEventListener('click', async () => {
+    const run = ++token; busy = true; controls(); resetAudio(); report('Starting local English OCR…');
+    try {
+      if (!window.Tesseract) {
+        await new Promise((resolve,reject) => {
+          const script = document.createElement('script'); script.src = `${assetBase}/ocr/tesseract.min.js`;
+          script.onload = resolve; script.onerror = () => { script.remove(); reject(Error('Could not load OCR. Check your connection and try again.')); }; document.head.append(script);
+        });
+      }
+      if (run !== token) return;
+      const worker = await Tesseract.createWorker('eng', 1, {
+        workerPath:`${assetBase}/ocr/worker.min.js`, corePath:`${assetBase}/ocr/tesseract-core-lstm.wasm.js`,
+        langPath:`${assetBase}/ocr`, workerBlobURL:false,
+        logger: info => { if (run === token) report(info.status === 'recognizing text' ? 'Reading text from your image…' : 'Preparing local OCR…', info.progress); }
+      });
+      if (run !== token) { await worker.terminate(); return; }
+      ocrWorker = worker;
+      const result = await worker.recognize(imageBlob);
+      await worker.terminate(); ocrWorker = null;
+      if (run !== token) return;
+      const extracted = result.data.text.trim();
+      text.value = extracted.slice(0,6000);
+      finish(!extracted ? 'No text found. Try a sharper image with larger, printed English text.' : extracted.length > 6000 ? 'Text extracted. The first 6,000 characters are shown; use smaller sections for the rest.' : 'Text extracted. Check for recognition mistakes, then create your narration.');
+    } catch (error) {
+      if (ocrWorker) { await ocrWorker.terminate(); ocrWorker = null; }
+      if (run === token) finish('Could not read the image: ' + error.message);
+    }
+  });
+  $('reader-speak').addEventListener('click', () => {
+    const content = text.value.trim(); if (!content || content.length > 6000) return;
+    if (engine.value === 'device') { startDevice(content); return; }
+    busy = true; controls(); resetAudio(); report('Preparing Kokoro… First use may take a little longer.');
+    if (!voiceWorker) {
+      voiceWorker = new Worker('/tools/reader-worker.js?v=2', {type:'module'});
+      voiceWorker.onmessage = ({data}) => {
+        if (data.type === 'status') report(data.text, data.progress);
+        if (data.type === 'error') { voiceWorker.terminate(); voiceWorker = null; finish('Kokoro could not finish. Try Device voice, or a shorter passage. ' + data.text); }
+        if (data.type === 'audio') {
+          // Release model memory before playback (important on memory-constrained browsers).
+          voiceWorker.terminate(); voiceWorker = null;
+          audioURL = URL.createObjectURL(wav(data.samples, data.rate)); audio.src = audioURL; download.href = audioURL;
+          $('reader-result').hidden = false; finish('Narration ready. Press play to listen, or download the WAV file.');
+        }
+      };
+      voiceWorker.onerror = () => { voiceWorker.terminate(); voiceWorker = null; finish('Kokoro could not start on this device. Choose Device voice, or try a desktop browser.'); };
+    }
+    voiceWorker.postMessage({text:content, voice:$('reader-voice').value, speed:Number($('reader-speed').value)});
+  });
+  $('reader-stop').addEventListener('click', () => {
+    token++; stopDevice(); voiceWorker?.terminate(); voiceWorker = null;
+    ocrWorker?.terminate(); ocrWorker = null;
+    $('reader-play').textContent = 'Play narration';
+    finish('Cancelled. Your image and text are still here.');
+  });
+  text.addEventListener('input', () => { resetAudio(); controls(); });
+  for (const id of ['reader-voice','reader-speed']) $(id).addEventListener('change', () => { resetAudio(); controls(); });
+  $('reader-example').addEventListener('click', () => {
+    text.value = 'Hello, I’m your image reader. Upload a picture, review the extracted text, and I’ll read it aloud. Everything runs locally on your own computer.';
+    resetAudio(); controls(); report('Sample text ready. Choose a voice and create narration.');
+  });
+  $('reader-clear').addEventListener('click', () => {
+    text.value = ''; upload.value = ''; imageBlob = null;
+    if (imageURL) URL.revokeObjectURL(imageURL); imageURL = null;
+    $('reader-preview').removeAttribute('src'); $('reader-preview').hidden = true; $('reader-filename').textContent = 'Photo Library, camera, or files · up to 20 MB';
+    resetAudio(); controls(); report('Ready for an image or pasted text.');
+  });
+  $('reader-play').addEventListener('click', async () => {
+    if (engine.value === 'device') {
+      if (!deviceSpeaking) { startDevice(text.value.trim()); return; }
+      if (speechSynthesis.paused) { speechSynthesis.resume(); $('reader-play').textContent = 'Pause narration'; }
+      else { speechSynthesis.pause(); $('reader-play').textContent = 'Resume narration'; }
+      return;
+    }
+    try { if (audio.paused) await audio.play(); else audio.pause(); }
+    catch (error) { report('Playback could not start. Try downloading the audio.'); }
+  });
+  audio.addEventListener('play', () => { $('reader-play').textContent = 'Pause narration'; });
+  audio.addEventListener('pause', () => { $('reader-play').textContent = 'Play narration'; });
+  audio.addEventListener('ended', () => { $('reader-play').textContent = 'Play narration'; });
+  function stopDevice() {
+    deviceRun++; deviceSpeaking = false;
+    if ('speechSynthesis' in window) speechSynthesis.cancel();
+    utterance = null;
+  }
+  function updateVoiceOptions() {
+    if (engine.value === 'kokoro') {
+      $('reader-voice').innerHTML = aiVoiceOptions;
+      $('reader-engine-note').textContent = offline ? 'Kokoro uses the voice model installed on this computer.' : 'Natural AI narration. Downloads about 90 MB on first use; may be slow on phones. Text is processed on your device.';
+      $('reader-speak').firstChild.textContent = 'Create narration ';
+    } else {
+      localVoices = window.speechSynthesis?.getVoices().filter(v => v.localService && /^en(?:-|_|$)/i.test(v.lang)) || [];
+      $('reader-voice').replaceChildren();
+      localVoices.forEach((v,i) => { const option = new Option(`${v.name} · ${v.lang}`, String(i)); $('reader-voice').add(option); });
+      if (!localVoices.length) $('reader-voice').add(new Option('Waiting for an installed English voice…',''));
+      $('reader-engine-note').textContent = 'Uses an installed on-device English voice. No AI model download; audio download is available only with Kokoro.';
+      $('reader-speak').firstChild.textContent = 'Read aloud ';
+    }
+  }
+  function startDevice(content) {
+    if (!('speechSynthesis' in window)) { report('Device speech is unavailable. Choose Kokoro instead.'); return; }
+    const voice = localVoices[Number($('reader-voice').value)];
+    if (!voice) { updateVoiceOptions(); report('No installed English voice is available yet. On iPhone, check Settings → Accessibility → Read & Speak (or Spoken Content) → Voices, or choose Kokoro.'); return; }
+    resetAudio(); deviceSpeaking = true; const run = ++deviceRun;
+    audio.hidden = true; download.hidden = true; $('reader-result').hidden = false;
+    $('reader-play').textContent = 'Pause narration'; controls(); report('Reading with your device voice…');
+    const sentences = content.match(/[^.!?]+[.!?]*/g) || [content];
+    const parts = [];
+    for (const sentence of sentences) {
+      let part = '';
+      for (const word of sentence.split(/\s+/)) {
+        if ((part + word).length > 200 && part) { parts.push(part); part = ''; }
+        part += word + ' ';
+      }
+      if (part.trim()) parts.push(part.trim());
+    }
+    let index = 0;
+    function next() {
+      if (run !== deviceRun) return;
+      if (index >= parts.length) { deviceSpeaking = false; controls(); $('reader-play').textContent = 'Play narration'; report('Finished reading.'); return; }
+      utterance = new SpeechSynthesisUtterance(parts[index++]); utterance.voice = voice; utterance.lang = voice.lang; utterance.rate = Number($('reader-speed').value);
+      utterance.onend = next;
+      utterance.onerror = event => { if (run !== deviceRun) return; stopDevice(); controls(); $('reader-play').textContent = 'Play narration'; report('Device speech stopped. Tap Read aloud to retry.'); };
+      speechSynthesis.speak(utterance);
+    }
+    next();
+  }
+  engine.addEventListener('change', () => { resetAudio(); updateVoiceOptions(); controls(); });
+  if ('speechSynthesis' in window) speechSynthesis.addEventListener('voiceschanged', () => { if (engine.value === 'device' && !deviceSpeaking) updateVoiceOptions(); });
+  if (isAppleMobile && 'speechSynthesis' in window) engine.value = 'device';
+  updateVoiceOptions();
+  window.addEventListener('pagehide', () => {
+    token++; stopDevice(); voiceWorker?.terminate(); ocrWorker?.terminate();
+    voiceWorker = ocrWorker = null; imageBlob = null;
+    if (imageURL) URL.revokeObjectURL(imageURL);
+    resetAudio(); text.value = ''; upload.value = ''; $('reader-preview').removeAttribute('src'); $('reader-preview').hidden = true;
+  });
+  window.addEventListener('pageshow', event => { if (event.persisted) { busy = false; controls(); report('Ready for an image or pasted text.'); } });
+  controls();
+})();

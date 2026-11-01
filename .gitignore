@@ -3,3 +3,6 @@ node_modules/
 .env
 .env.*
 !.env.example
+
+# Downloaded offline OCR and voice assets
+.local-tools/
