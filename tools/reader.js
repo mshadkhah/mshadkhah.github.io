@@ -20,6 +20,7 @@
   });
   const audio = $('reader-audio'), download = $('reader-download'), progress = $('reader-progress');
   const MAX_IMAGES = 10;
+  const MAX_TEXT = 60000;
   let busy = false, imageURL, audioURL, imageBlobs = [], voiceWorker, ocrWorker, token = 0;
   function report(message, value) {
     status.textContent = message;
@@ -31,7 +32,7 @@
     $('reader-speak').disabled = busy || !text.value.trim();
     $('reader-stop').hidden = !busy && !deviceSpeaking;
     for (const id of ['reader-file','reader-camera-button','reader-camera','reader-text','reader-voice','reader-speed','reader-engine','reader-example','reader-clear']) $(id).disabled = busy;
-    $('reader-count').textContent = `${text.value.length.toLocaleString()} / 6,000 characters`;
+    $('reader-count').textContent = `${text.value.length.toLocaleString()} / 60,000 characters`;
     $('reader-card').setAttribute('aria-busy', String(busy));
   }
   function finish(message) { busy = false; controls(); report(message); }
@@ -110,11 +111,26 @@
   upload.addEventListener('change', loadImage);
   $('reader-camera').addEventListener('change', loadImage);
   $('reader-camera-button').addEventListener('click', () => $('reader-camera').click());
+  let suggestedName = '';
+  function blobToBase64(blob) {
+    return new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result.slice(reader.result.indexOf(',') + 1)); reader.onerror = () => reject(Error('could not read the photo')); reader.readAsDataURL(blob); });
+  }
+  // Asks Claude for a file name built from the author, title, and page numbers. Runs in the background.
+  async function suggestName(combined) {
+    suggestedName = '';
+    if (!AI_OCR_URL || !combined || !imageBlobs.length) return;
+    try {
+      const image = await blobToBase64(imageBlobs[0]);
+      const response = await fetch(AI_OCR_URL + '/name', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ text: combined.slice(0, 3000), image }) });
+      if (response.ok) suggestedName = (await response.json()).name || '';
+    } catch (error) { suggestedName = ''; }
+  }
   function showExtracted(results, engineName) {
     const combined = results.map(part => part.trim()).filter(Boolean).join('\n\n');
-    text.value = combined.slice(0, 6000);
+    text.value = combined.slice(0, MAX_TEXT);
+    suggestName(combined);
     const from = imageBlobs.length > 1 ? ` from ${imageBlobs.length} photos` : '';
-    finish(!combined ? 'No text found. Try a sharper photo, with the page filling the frame.' : combined.length > 6000 ? `Text extracted${from} with ${engineName}. The first 6,000 characters are shown; use smaller sections for the rest.` : `Text extracted${from} with ${engineName}. Review the text before listening.`);
+    finish(!combined ? 'No text found. Try a sharper photo, with the page filling the frame.' : combined.length > MAX_TEXT ? `Text extracted${from} with ${engineName}. The first 60,000 characters are shown; use smaller sections for the rest.` : `Text extracted${from} with ${engineName}. Review the text before listening.`);
   }
   async function extractWithPaddle(run) {
     report('Loading PaddleOCR… First use downloads the text models.');
@@ -209,13 +225,14 @@
     voiceWorker.postMessage({text:content, voice:$('reader-voice').value, speed:Number($('reader-speed').value)});
   }
   $('reader-speak').addEventListener('click', async () => {
-    const content = text.value.trim(); if (!content || content.length > 6000) return;
+    const content = text.value.trim(); if (!content || content.length > MAX_TEXT) return;
     if (engine.value === 'device') { startDevice(content); return; }
     if (AI_OCR_URL) {
       busy = true; controls(); resetAudio(); report('Creating narration on the home voice server…');
       try {
         const blob = await speakOnServer(content);
         audioURL = URL.createObjectURL(blob); audio.src = audioURL; download.href = audioURL;
+        download.download = (suggestedName || 'narration') + '.wav';
         $('reader-result').hidden = false; finish('Narration ready. Press play to listen, or download the WAV file.');
       } catch (error) {
         finish('The home voice server is unavailable right now. Try again in a moment.');

@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 from kokoro import KPipeline
 
 TOKEN = os.environ.get("KOKORO_TOKEN", "")
-MAX_CHARS = 6000
+MAX_CHARS = 60000
 ALLOWED_VOICES = {"af_heart", "af_bella", "am_michael", "bf_emma"}  # adjust to voices you installed
 
 app = FastAPI()
@@ -30,8 +30,18 @@ app.add_middleware(
     allow_headers=["Content-Type", "X-Token"],
 )
 
+def load_pipeline():
+    # The GPU is about 8x faster on the home machine; fall back to the CPU if it can't load.
+    for device in ("cuda", "cpu"):
+        try:
+            return KPipeline(lang_code="a", device=device)
+        except Exception as error:
+            print(f"Could not load Kokoro on {device}: {str(error)[:120]}", flush=True)
+    raise RuntimeError("Kokoro could not load on any device")
+
+
 # American English pipeline. Loaded once at startup so each request only generates audio.
-pipeline = KPipeline(lang_code="a", device="cpu")  # CPU is fast enough for Kokoro and avoids GPU memory errors
+pipeline = load_pipeline()
 
 
 class SpeakRequest(BaseModel):

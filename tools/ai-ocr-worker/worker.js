@@ -32,7 +32,7 @@ function json(body, status, headers) {
 async function handleSpeak(request, env, headers) {
   const body = await request.json().catch(() => null);
   if (!body || typeof body.text !== 'string' || !body.text.trim()) return json({ error: 'Missing text' }, 400, headers);
-  if (body.text.length > 6000) return json({ error: 'Text is too long' }, 413, headers);
+  if (body.text.length > 60000) return json({ error: 'Text is too long' }, 413, headers);
 
   let upstream;
   try {
@@ -45,7 +45,47 @@ async function handleSpeak(request, env, headers) {
     return json({ error: 'Voice server is unreachable.' }, 502, headers);
   }
   if (!upstream.ok) return json({ error: 'Voice server returned ' + upstream.status }, 502, headers);
-  return new Response(await upstream.arrayBuffer(), { status: 200, headers: { ...headers, 'Content-Type': 'audio/wav' } });
+  // Stream the audio through instead of buffering it, so long narrations stay within Worker memory limits.
+  return new Response(upstream.body, { status: 200, headers: { ...headers, 'Content-Type': 'audio/wav' } });
+}
+
+// /name asks Claude for a short file name such as Goeman_Gendered-Geographies_p542-543.
+const NAME_PROMPT = [
+  'This is text from a book, and the photo may show the page with its page number.',
+  'Suggest a short file name for an audio recording of this text.',
+  'Include the author\'s last name, a short title, and the page number(s) if you can read them in the photo.',
+  'Example: Goeman_Gendered-Geographies_p542-543.',
+  'Use only letters, digits, hyphens, and underscores. Reply with JSON only, like {"name": "..."}.'
+].join(' ');
+
+async function handleName(request, env, headers) {
+  const body = await request.json().catch(() => null);
+  if (!body || typeof body.text !== 'string') return json({ error: 'Missing text' }, 400, headers);
+
+  const content = [];
+  if (typeof body.image === 'string' && body.image.length && body.image.length <= MAX_BODY_CHARS) {
+    content.push({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: body.image } });
+  }
+  content.push({ type: 'text', text: NAME_PROMPT + '\n\nText:\n' + body.text.slice(0, 3000) });
+
+  let upstream;
+  try {
+    upstream = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+      body: JSON.stringify({ model: env.CLAUDE_MODEL || 'claude-haiku-5-5', max_tokens: 100, messages: [{ role: 'user', content }] })
+    });
+  } catch (error) {
+    return json({ error: 'Name service is unreachable.' }, 502, headers);
+  }
+  if (!upstream.ok) return json({ error: 'Name service returned an error.' }, 502, headers);
+
+  const data = await upstream.json();
+  const reply = (data.content || []).filter(block => block.type === 'text').map(block => block.text).join('');
+  let name = '';
+  try { name = JSON.parse(reply.match(/\{[\s\S]*\}/)[0]).name || ''; } catch (error) { name = ''; }
+  name = name.normalize('NFKD').replace(/[^A-Za-z0-9_-]+/g, '-').replace(/-+/g, '-').replace(/^[-_]+|[-_]+$/g, '').slice(0, 80);
+  return json({ name: name || 'narration' }, 200, headers);
 }
 
 export default {
@@ -57,6 +97,7 @@ export default {
     if (request.method !== 'POST') return json({ error: 'Method not allowed' }, 405, headers);
     if (!ALLOWED_ORIGINS.includes(origin)) return json({ error: 'Origin not allowed' }, 403, headers);
     if (new URL(request.url).pathname === '/speak') return handleSpeak(request, env, headers);
+    if (new URL(request.url).pathname === '/name') return handleName(request, env, headers);
 
     const body = await request.json().catch(() => null);
     if (!body || typeof body.image !== 'string' || !body.image.length) return json({ error: 'Missing image' }, 400, headers);
