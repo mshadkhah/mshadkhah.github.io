@@ -5,11 +5,12 @@
 const ALLOWED_ORIGINS = ['https://mshadkhah.github.io', 'http://127.0.0.1:8001'];
 const MAX_BODY_CHARS = 8_000_000; // base64 JPEG; the reader sends roughly 1-3 MB
 const PROMPT = [
-  'This photo may show an open book, possibly two facing pages, and it may be rotated or tilted.',
-  'First work out the orientation so the text reads normally, then transcribe all readable text in reading order: the left page first, then the right page.',
+  'This photo shows one book page, and it may be rotated or tilted.',
+  'First work out the orientation so the text reads normally.',
+  'Transcribe all of the text on the main page, the page that fills the frame.',
+  'Ignore any text from a neighboring page visible at the edge.',
   'Output only the transcribed text, keeping paragraph breaks.',
   'Join words split by a hyphen at the end of a line (for example "Sen-" plus "eca" becomes "Seneca").',
-  'If a page is only partly visible, transcribe what is visible.',
   'Do not add commentary, descriptions, translations, or markdown.',
   'If there is no readable text at all, output nothing.'
 ].join(' ');

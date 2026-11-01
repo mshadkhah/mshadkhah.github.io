@@ -19,14 +19,15 @@
     $('tools-open-reader').focus();
   });
   const audio = $('reader-audio'), download = $('reader-download'), progress = $('reader-progress');
-  let busy = false, imageURL, audioURL, imageBlob, voiceWorker, ocrWorker, token = 0;
+  const MAX_IMAGES = 10;
+  let busy = false, imageURL, audioURL, imageBlobs = [], voiceWorker, ocrWorker, token = 0;
   function report(message, value) {
     status.textContent = message;
     progress.hidden = !busy;
     if (value === undefined) progress.removeAttribute('value'); else progress.value = value;
   }
   function controls() {
-    $('reader-extract').disabled = busy || !imageBlob;
+    $('reader-extract').disabled = busy || !imageBlobs.length;
     $('reader-speak').disabled = busy || !text.value.trim();
     $('reader-stop').hidden = !busy && !deviceSpeaking;
     for (const id of ['reader-file','reader-camera-button','reader-camera','reader-text','reader-voice','reader-speed','reader-engine','reader-example','reader-clear']) $(id).disabled = busy;
@@ -50,37 +51,54 @@
     samples.forEach((s,i) => view.setInt16(44 + i * 2, Math.max(-1, Math.min(1,s)) * (s < 0 ? 32768 : 32767), true));
     return new Blob([buffer], {type:'audio/wav'});
   }
-  async function loadImage(event) {
-    const picker = event.currentTarget;
-    const file = picker.files[0]; if (!file) return;
-    const run = ++token;
-    if (!(file.type.startsWith('image/') || /\.(heic|heif|jpe?g|png|webp|bmp)$/i.test(file.name)) || file.size > 20 * 1024 * 1024) {
-      picker.value = ''; report('Choose a photo or screenshot smaller than 20 MB.'); return;
-    }
-    busy = true; controls(); resetAudio(); report('Opening your photo on this device…');
+  async function toPhotoBlob(file) {
+    // Safari's native image decoder supports iPhone HEIC and photo orientation.
+    // Draw into a small canvas rather than allocating a full-resolution OCR canvas.
     let sourceURL;
     try {
-      // Safari's native image decoder supports iPhone HEIC and photo orientation.
-      // Draw into a small canvas rather than allocating a full-resolution OCR canvas.
       sourceURL = URL.createObjectURL(file);
       const image = new Image();
       await new Promise((resolve, reject) => { image.onload = resolve; image.onerror = () => reject(Error('This browser cannot open the photo. Try Safari 17 or later for HEIC, or choose a screenshot or JPEG.')); image.src = sourceURL; });
-      if (run !== token) return;
       if (image.naturalWidth * image.naturalHeight > 100000000) throw Error('This photo is too large. Choose a smaller image or screenshot.');
       const scale = Math.min(1, (isAppleMobile ? 1800 : 2400) / Math.max(image.naturalWidth, image.naturalHeight));
       const canvas = document.createElement('canvas'); canvas.width = Math.max(1, Math.round(image.naturalWidth * scale)); canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
       const ctx = canvas.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0,0,canvas.width,canvas.height); ctx.drawImage(image,0,0,canvas.width,canvas.height);
       const blob = await new Promise(resolve => canvas.toBlob(resolve,'image/jpeg', 0.92));
       canvas.width = canvas.height = 1; image.src = '';
-      if (run !== token) return;
       if (!blob) throw Error('Could not open this image. Try a PNG or JPEG.');
-      if (imageURL) URL.revokeObjectURL(imageURL);
-      imageBlob = blob; imageURL = URL.createObjectURL(blob); text.value = '';
-      $('reader-preview').src = imageURL; $('reader-preview').hidden = false;
-      $('reader-filename').textContent = file.name; resetAudio();
-      finish('Image ready. Extract the text, then review it before listening.');
-    } catch (error) { if (run === token) finish(error.message); }
-    finally { if (sourceURL) URL.revokeObjectURL(sourceURL); picker.value = ''; }
+      return blob;
+    } finally { if (sourceURL) URL.revokeObjectURL(sourceURL); }
+  }
+  function showPhotos() {
+    const count = imageBlobs.length;
+    if (imageURL) URL.revokeObjectURL(imageURL);
+    imageURL = count ? URL.createObjectURL(imageBlobs[count - 1]) : null;
+    if (imageURL) { $('reader-preview').src = imageURL; $('reader-preview').hidden = false; }
+    else { $('reader-preview').removeAttribute('src'); $('reader-preview').hidden = true; }
+    $('reader-filename').textContent = count ? `${count} of ${MAX_IMAGES} photo${count > 1 ? 's' : ''} selected. The preview shows the latest one.` : 'Photo Library, camera, or files · up to 10 photos, 20 MB each';
+  }
+  async function loadImage(event) {
+    const picker = event.currentTarget;
+    const files = [...picker.files];
+    picker.value = '';
+    if (!files.length) return;
+    const run = ++token;
+    busy = true; controls(); resetAudio();
+    let added = 0;
+    try {
+      for (const file of files) {
+        if (imageBlobs.length >= MAX_IMAGES) { report(`You can add up to ${MAX_IMAGES} photos. Clear the list to start over.`); break; }
+        if (!(file.type.startsWith('image/') || /\.(heic|heif|jpe?g|png|webp|bmp)$/i.test(file.name)) || file.size > 20 * 1024 * 1024) { report(`Skipped ${file.name}: choose a photo or screenshot smaller than 20 MB.`); continue; }
+        report(`Opening photo ${imageBlobs.length + 1} on this device…`);
+        const blob = await toPhotoBlob(file);
+        if (run !== token) return;
+        imageBlobs.push(blob); added++;
+      }
+    } catch (error) { if (run === token) finish(error.message); return; }
+    if (run !== token) return;
+    if (added) text.value = '';
+    showPhotos();
+    finish(added ? `${imageBlobs.length} photo${imageBlobs.length > 1 ? 's' : ''} ready. Press Extract text, then review the result before listening.` : 'No photos were added.');
   }
   async function extractWithClaude(blob) {
     const dataURL = await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = () => reject(Error('could not read the photo')); reader.readAsDataURL(blob); });
@@ -92,26 +110,18 @@
   upload.addEventListener('change', loadImage);
   $('reader-camera').addEventListener('change', loadImage);
   $('reader-camera-button').addEventListener('click', () => $('reader-camera').click());
-  $('reader-extract').addEventListener('click', async () => {
-    const run = ++token; busy = true; controls(); resetAudio();
-    if (AI_OCR_URL) {
-      report('Reading text with Claude…');
-      try {
-        const aiText = await extractWithClaude(imageBlob);
-        if (run !== token) return;
-        text.value = aiText.slice(0,6000);
-        finish(!aiText ? 'No text found. Try a sharper photo, with the page filling the frame.' : aiText.length > 6000 ? 'Text extracted with Claude. The first 6,000 characters are shown; use smaller sections for the rest.' : 'Text extracted with Claude. Review the text before listening.');
-        return;
-      } catch (error) {
-        if (run !== token) return;
-        report('Claude could not read this photo (' + error.message + '). Trying on-device OCR…');
-      }
-    }
+  function showExtracted(results, engineName) {
+    const combined = results.map(part => part.trim()).filter(Boolean).join('\n\n');
+    text.value = combined.slice(0, 6000);
+    const from = imageBlobs.length > 1 ? ` from ${imageBlobs.length} photos` : '';
+    finish(!combined ? 'No text found. Try a sharper photo, with the page filling the frame.' : combined.length > 6000 ? `Text extracted${from} with ${engineName}. The first 6,000 characters are shown; use smaller sections for the rest.` : `Text extracted${from} with ${engineName}. Review the text before listening.`);
+  }
+  async function extractWithPaddle(run) {
     report('Loading PaddleOCR… First use downloads the text models.');
     let worker;
     try {
       const { PaddleOCR } = await import('/tools/assets/paddle/paddle.mjs');
-      if (run !== token) return;
+      if (run !== token) return [];
       const base = new URL('/tools/assets/paddle/', location.href).href;
       // The SDK creates its worker lazily, so the error listener is attached inside createWorker.
       let stopWithError;
@@ -133,18 +143,44 @@
         ortOptions: {backend:'wasm', wasmPaths:base, numThreads:1}
       });
       await Promise.race([ocr.initialize(), failed]);
-      if (run !== token) return;
-      report('Reading text with PaddleOCR…');
-      const [result] = await Promise.race([ocr.predict(imageBlob, {textDetLimitSideLen:1536, textDetLimitType:'max'}), failed]);
-      if (run !== token) return;
-      const extracted = result.items.map(item => item.text).join('\n').trim();
-      text.value = extracted.slice(0,6000);
-      finish(!extracted ? 'No text found. Try a sharper photo, with the page filling the frame.' : extracted.length > 6000 ? 'Text extracted. The first 6,000 characters are shown; use smaller sections for the rest.' : 'Text extracted with PaddleOCR. Review the text and reading order before listening.');
-    } catch (error) {
-      if (run === token) finish('Could not read the image: ' + error.message);
+      if (run !== token) return [];
+      const results = [];
+      for (let i = 0; i < imageBlobs.length; i++) {
+        report(`Reading photo ${i + 1} of ${imageBlobs.length} with PaddleOCR…`);
+        const [result] = await Promise.race([ocr.predict(imageBlobs[i], {textDetLimitSideLen:1536, textDetLimitType:'max'}), failed]);
+        if (run !== token) return [];
+        results.push(result.items.map(item => item.text).join('\n'));
+      }
+      return results;
     } finally {
       worker?.terminate();
       if (ocrWorker === worker) ocrWorker = null;
+    }
+  }
+  $('reader-extract').addEventListener('click', async () => {
+    if (!imageBlobs.length) return;
+    const run = ++token; busy = true; controls(); resetAudio();
+    if (AI_OCR_URL) {
+      try {
+        const results = [];
+        for (let i = 0; i < imageBlobs.length; i++) {
+          report(`Reading photo ${i + 1} of ${imageBlobs.length} with Claude…`);
+          results.push(await extractWithClaude(imageBlobs[i]));
+          if (run !== token) return;
+        }
+        showExtracted(results, 'Claude');
+        return;
+      } catch (error) {
+        if (run !== token) return;
+        report('Claude could not read a photo (' + error.message + '). Trying on-device OCR…');
+      }
+    }
+    try {
+      const results = await extractWithPaddle(run);
+      if (run !== token) return;
+      showExtracted(results, 'PaddleOCR');
+    } catch (error) {
+      if (run === token) finish('Could not read the photos: ' + error.message);
     }
   });
   async function speakOnServer(content) {
@@ -201,9 +237,9 @@
     resetAudio(); controls(); report('Sample text ready. Choose a voice and create narration.');
   });
   $('reader-clear').addEventListener('click', () => {
-    text.value = ''; upload.value = ''; $('reader-camera').value = ''; imageBlob = null;
+    text.value = ''; upload.value = ''; $('reader-camera').value = ''; imageBlobs = [];
     if (imageURL) URL.revokeObjectURL(imageURL); imageURL = null;
-    $('reader-preview').removeAttribute('src'); $('reader-preview').hidden = true; $('reader-filename').textContent = 'Photo Library, camera, or files · up to 20 MB';
+    $('reader-preview').removeAttribute('src'); $('reader-preview').hidden = true; $('reader-filename').textContent = 'Photo Library, camera, or files · up to 10 photos, 20 MB each';
     resetAudio(); controls(); report('Ready for an image or pasted text.');
   });
   $('reader-play').addEventListener('click', async () => {
@@ -272,7 +308,7 @@
   updateVoiceOptions();
   window.addEventListener('pagehide', () => {
     token++; stopDevice(); voiceWorker?.terminate(); ocrWorker?.terminate();
-    voiceWorker = ocrWorker = null; imageBlob = null;
+    voiceWorker = ocrWorker = null; imageBlobs = [];
     if (imageURL) URL.revokeObjectURL(imageURL);
     resetAudio(); text.value = ''; upload.value = ''; $('reader-camera').value = ''; $('reader-preview').removeAttribute('src'); $('reader-preview').hidden = true;
   });
