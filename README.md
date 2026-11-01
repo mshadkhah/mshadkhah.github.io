@@ -12,7 +12,7 @@ The background flow in `flow.js` uses a small velocity grid with pressure projec
 
 ## Tools: Image to Speech
 
-The Tools directory includes an English image reader with client-side Tesseract OCR, Kokoro narration, and installed device voices. Photos, extracted text, and generated audio remain in browser memory; no image/text upload endpoint or persistent storage is used. Clear and page exit release the image. Model files may be cached by the browser. Downloading narration explicitly saves a WAV file on the user's device.
+The Tools directory includes an English image reader with Claude text extraction (through the Cloudflare Worker in tools/ai-ocr-worker, which forwards the photo to Anthropic and stores nothing), on-device PaddleOCR as a fallback, Kokoro narration, and installed device voices. Photos, extracted text, and generated audio remain in browser memory; the site itself stores no images or text. Clear and page exit release the image. Model files may be cached by the browser. Downloading narration explicitly saves a WAV file on the user's device.
 
 ### Phones and deployment
 

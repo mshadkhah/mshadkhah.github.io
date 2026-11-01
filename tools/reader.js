@@ -2,6 +2,8 @@
 (() => {
   const $ = id => document.getElementById(id);
   const offline = location.hostname === '127.0.0.1' && location.port === '8001';
+  // Claude text extraction through the Cloudflare Worker in tools/ai-ocr-worker. Leave empty to use only on-device PaddleOCR.
+  const AI_OCR_URL = 'https://mshadkhah-ai-ocr.mshadkhah.workers.dev';
   const isAppleMobile = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   const engine = $('reader-engine');
   const aiVoiceOptions = $('reader-voice').innerHTML;
@@ -68,7 +70,7 @@
       const scale = Math.min(1, (isAppleMobile ? 1800 : 2400) / Math.max(image.naturalWidth, image.naturalHeight));
       const canvas = document.createElement('canvas'); canvas.width = Math.max(1, Math.round(image.naturalWidth * scale)); canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
       const ctx = canvas.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0,0,canvas.width,canvas.height); ctx.drawImage(image,0,0,canvas.width,canvas.height);
-      const blob = await new Promise(resolve => canvas.toBlob(resolve,'image/png'));
+      const blob = await new Promise(resolve => canvas.toBlob(resolve,'image/jpeg', 0.92));
       canvas.width = canvas.height = 1; image.src = '';
       if (run !== token) return;
       if (!blob) throw Error('Could not open this image. Try a PNG or JPEG.');
@@ -80,11 +82,32 @@
     } catch (error) { if (run === token) finish(error.message); }
     finally { if (sourceURL) URL.revokeObjectURL(sourceURL); picker.value = ''; }
   }
+  async function extractWithClaude(blob) {
+    const dataURL = await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = () => reject(Error('could not read the photo')); reader.readAsDataURL(blob); });
+    const response = await fetch(AI_OCR_URL, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ image: dataURL.slice(dataURL.indexOf(',') + 1) }) });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw Error(data.error || 'service error ' + response.status);
+    return (data.text || '').trim();
+  }
   upload.addEventListener('change', loadImage);
   $('reader-camera').addEventListener('change', loadImage);
   $('reader-camera-button').addEventListener('click', () => $('reader-camera').click());
   $('reader-extract').addEventListener('click', async () => {
-    const run = ++token; busy = true; controls(); resetAudio(); report('Loading PaddleOCR… First use downloads the text models.');
+    const run = ++token; busy = true; controls(); resetAudio();
+    if (AI_OCR_URL) {
+      report('Reading text with Claude…');
+      try {
+        const aiText = await extractWithClaude(imageBlob);
+        if (run !== token) return;
+        text.value = aiText.slice(0,6000);
+        finish(!aiText ? 'No text found. Try a sharper photo, with the page filling the frame.' : aiText.length > 6000 ? 'Text extracted with Claude. The first 6,000 characters are shown; use smaller sections for the rest.' : 'Text extracted with Claude. Review the text before listening.');
+        return;
+      } catch (error) {
+        if (run !== token) return;
+        report('Claude could not read this photo (' + error.message + '). Trying on-device OCR…');
+      }
+    }
+    report('Loading PaddleOCR… First use downloads the text models.');
     let worker;
     try {
       const { PaddleOCR } = await import('/tools/assets/paddle/paddle.mjs');
