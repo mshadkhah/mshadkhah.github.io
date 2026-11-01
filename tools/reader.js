@@ -212,15 +212,15 @@
     const content = text.value.trim(); if (!content || content.length > 6000) return;
     if (engine.value === 'device') { startDevice(content); return; }
     if (AI_OCR_URL) {
-      busy = true; controls(); resetAudio(); report('Creating narration…');
+      busy = true; controls(); resetAudio(); report('Creating narration on the home voice server…');
       try {
         const blob = await speakOnServer(content);
         audioURL = URL.createObjectURL(blob); audio.src = audioURL; download.href = audioURL;
         $('reader-result').hidden = false; finish('Narration ready. Press play to listen, or download the WAV file.');
-        return;
       } catch (error) {
-        report('Home voice server unavailable; using the in-browser voice…');
+        finish('The home voice server is unavailable right now. Try again in a moment.');
       }
+      return;
     }
     speakInBrowser(content);
   });
