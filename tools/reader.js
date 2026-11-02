@@ -350,7 +350,7 @@
   if (returned.get('session')) { session = returned.get('session'); sessionStorage.setItem('tools-session', session); }
   if (location.hash) history.replaceState(null, '', location.pathname + location.search);
   $('reader-signin-button').addEventListener('click', () => {
-    location.href = TOOLS_API_URL + '/auth/login?return=' + encodeURIComponent(location.origin + location.pathname + location.search);
+    location.href = TOOLS_API_URL + '/auth/login?return=' + encodeURIComponent(location.origin + location.pathname + '?section=tools');
   });
   $('reader-signout').addEventListener('click', () => {
     session = null; signedInAs = ''; sessionStorage.removeItem('tools-session');
