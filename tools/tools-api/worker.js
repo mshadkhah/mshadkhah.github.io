@@ -289,8 +289,10 @@ async function route(request, env) {
     if (request.method !== 'POST') return json({ error: 'Method not allowed' }, 405, headers);
     if (!ALLOWED_ORIGINS.includes(origin)) return json({ error: 'Origin not allowed' }, 403, headers);
 
-    const login = await currentUser(request, env);
-    if (!login) return json({ error: 'Sign in with GitHub to use this tool.' }, 401, headers);
+    if (env.REQUIRE_SIGNIN !== 'false') {
+      const login = await currentUser(request, env);
+      if (!login) return json({ error: 'Sign in with GitHub to use this tool.' }, 401, headers);
+    }
 
     if (url.pathname === '/speak') return handleSpeak(request, env, headers);
     if (url.pathname === '/name') return handleName(request, env, headers);

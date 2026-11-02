@@ -4,6 +4,8 @@
   const offline = location.hostname === '127.0.0.1' && location.port === '8001';
   // Tools API: a Cloudflare Worker (tools/tools-api) that handles sign-in, Claude requests, and voice requests. Leave empty to use only the on-device engine.
   const TOOLS_API_URL = 'https://mshadkhah-tools.mshadkhah.workers.dev';
+  // Set to true to require GitHub sign-in before the tools can be used. Keep in step with REQUIRE_SIGNIN in the Worker.
+  const SIGNIN_REQUIRED = false;
   const isAppleMobile = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   const engine = $('reader-engine');
   const aiVoiceOptions = $('reader-voice').innerHTML;
@@ -32,13 +34,13 @@
     if (value === undefined) progress.removeAttribute('value'); else progress.value = value;
   }
   function renderAuth() {
-    const locked = !session;
+    const locked = SIGNIN_REQUIRED && !session;
     $('reader-signin').hidden = !locked;
-    $('reader-user').hidden = locked;
+    $('reader-user').hidden = !session;
     $('reader-user-name').textContent = signedInAs;
   }
   function controls() {
-    const locked = !session;
+    const locked = SIGNIN_REQUIRED && !session;
     $('reader-extract').disabled = busy || locked || !imageBlobs.length;
     $('reader-speak').disabled = busy || locked || !text.value.trim();
     $('reader-stop').hidden = !busy && !deviceSpeaking;

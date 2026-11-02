@@ -9,6 +9,8 @@ KOKORO_URL = "https://spark-6082.taild8f391.ts.net"
 GITHUB_CLIENT_ID = "Ov23lipPkfkTQevH8sYg"
 # The GitHub username of the owner, who can always use the tools and manage access.
 OWNER_LOGIN = "mshadkhah"
+# Set to "true" to require GitHub sign-in for the tools. "false" turns the requirement off.
+REQUIRE_SIGNIN = "false"
 
 # Allowed-people list (created with `npx wrangler kv namespace create USERS`).
 [[kv_namespaces]]
