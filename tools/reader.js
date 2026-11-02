@@ -2,8 +2,8 @@
 (() => {
   const $ = id => document.getElementById(id);
   const offline = location.hostname === '127.0.0.1' && location.port === '8001';
-  // Claude text extraction through the Cloudflare Worker in tools/ai-ocr-worker. Leave empty to use only on-device PaddleOCR.
-  const AI_OCR_URL = 'https://mshadkhah-ai-ocr.mshadkhah.workers.dev';
+  // Tools API: a Cloudflare Worker (tools/tools-api) that handles sign-in, Claude requests, and voice requests. Leave empty to use only the on-device engine.
+  const TOOLS_API_URL = 'https://mshadkhah-tools.mshadkhah.workers.dev';
   const isAppleMobile = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   const engine = $('reader-engine');
   const aiVoiceOptions = $('reader-voice').innerHTML;
@@ -21,17 +21,28 @@
   const audio = $('reader-audio'), download = $('reader-download'), progress = $('reader-progress');
   const MAX_IMAGES = 10;
   const MAX_TEXT = 60000;
-  let busy = false, imageURL, audioURL, imageBlobs = [], voiceWorker, ocrWorker, token = 0;
+  let busy = false, imageURL, audioURL, imageBlobs = [], voiceWorker, engineWorker, token = 0;
+  // Sign-in: the session token comes from the Worker after GitHub sign-in and is kept for this browser tab.
+  let session = sessionStorage.getItem('tools-session');
+  let signedInAs = '';
+  function authHeaders() { return session ? { Authorization: 'Bearer ' + session } : {}; }
   function report(message, value) {
     status.textContent = message;
     progress.hidden = !busy;
     if (value === undefined) progress.removeAttribute('value'); else progress.value = value;
   }
+  function renderAuth() {
+    const locked = !session;
+    $('reader-signin').hidden = !locked;
+    $('reader-user').hidden = locked;
+    $('reader-user-name').textContent = signedInAs;
+  }
   function controls() {
-    $('reader-extract').disabled = busy || !imageBlobs.length;
-    $('reader-speak').disabled = busy || !text.value.trim();
+    const locked = !session;
+    $('reader-extract').disabled = busy || locked || !imageBlobs.length;
+    $('reader-speak').disabled = busy || locked || !text.value.trim();
     $('reader-stop').hidden = !busy && !deviceSpeaking;
-    for (const id of ['reader-file','reader-camera-button','reader-camera','reader-text','reader-voice','reader-speed','reader-engine','reader-example','reader-clear']) $(id).disabled = busy;
+    for (const id of ['reader-file','reader-camera-button','reader-camera','reader-text','reader-voice','reader-speed','reader-engine','reader-example','reader-clear']) $(id).disabled = busy || locked;
     $('reader-count').textContent = `${text.value.length.toLocaleString()} / 60,000 characters`;
     $('reader-card').setAttribute('aria-busy', String(busy));
   }
@@ -54,7 +65,7 @@
   }
   async function toPhotoBlob(file) {
     // Safari's native image decoder supports iPhone HEIC and photo orientation.
-    // Draw into a small canvas rather than allocating a full-resolution OCR canvas.
+    // Draw into a small canvas rather than allocating a full-resolution canvas.
     let sourceURL;
     try {
       sourceURL = URL.createObjectURL(file);
@@ -103,9 +114,9 @@
   }
   async function extractWithClaude(blob) {
     const dataURL = await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = () => reject(Error('could not read the photo')); reader.readAsDataURL(blob); });
-    const response = await fetch(AI_OCR_URL, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ image: dataURL.slice(dataURL.indexOf(',') + 1) }) });
+    const response = await fetch(TOOLS_API_URL, { method: 'POST', headers: {'Content-Type': 'application/json', ...authHeaders()}, body: JSON.stringify({ image: dataURL.slice(dataURL.indexOf(',') + 1) }) });
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw Error(data.error || 'service error ' + response.status);
+    if (!response.ok) throw Object.assign(Error(data.error || 'service error ' + response.status), { status: response.status });
     return (data.text || '').trim();
   }
   upload.addEventListener('change', loadImage);
@@ -118,10 +129,10 @@
   // Asks Claude for a file name built from the author, title, and page numbers. Runs in the background.
   async function suggestName(combined) {
     suggestedName = '';
-    if (!AI_OCR_URL || !combined || !imageBlobs.length) return;
+    if (!TOOLS_API_URL || !combined || !imageBlobs.length) return;
     try {
       const image = await blobToBase64(imageBlobs[0]);
-      const response = await fetch(AI_OCR_URL + '/name', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ text: combined.slice(0, 3000), image }) });
+      const response = await fetch(TOOLS_API_URL + '/name', { method: 'POST', headers: {'Content-Type': 'application/json', ...authHeaders()}, body: JSON.stringify({ text: combined.slice(0, 3000), image }) });
       if (response.ok) suggestedName = (await response.json()).name || '';
     } catch (error) { suggestedName = ''; }
   }
@@ -132,8 +143,8 @@
     const from = imageBlobs.length > 1 ? ` from ${imageBlobs.length} photos` : '';
     finish(!combined ? 'No text found. Try a sharper photo, with the page filling the frame.' : combined.length > MAX_TEXT ? `Text extracted${from} with ${engineName}. The first 60,000 characters are shown; use smaller sections for the rest.` : `Text extracted${from} with ${engineName}. Review the text before listening.`);
   }
-  async function extractWithPaddle(run) {
-    report('Loading PaddleOCR… First use downloads the text models.');
+  async function extractOnDevice(run) {
+    report('Loading the on-device engine… First use downloads its files.');
     let worker;
     try {
       const { PaddleOCR } = await import('/tools/assets/paddle/paddle.mjs');
@@ -152,8 +163,8 @@
         textRecognitionBatchSize: 1,
         worker: {createWorker: () => {
           worker = new Worker(base + 'assets/worker-entry-C9UNuyOJ.js', {type:'module'});
-          ocrWorker = worker;
-          worker.addEventListener('error', () => stopWithError(Error('The OCR worker stopped. Try a smaller photo or close other tabs.')), {once:true});
+          engineWorker = worker;
+          worker.addEventListener('error', () => stopWithError(Error('The background worker stopped. Try smaller photos, or close other tabs.')), {once:true});
           return worker;
         }},
         ortOptions: {backend:'wasm', wasmPaths:base, numThreads:1}
@@ -162,7 +173,7 @@
       if (run !== token) return [];
       const results = [];
       for (let i = 0; i < imageBlobs.length; i++) {
-        report(`Reading photo ${i + 1} of ${imageBlobs.length} with PaddleOCR…`);
+        report(`Reading photo ${i + 1} of ${imageBlobs.length} on this device…`);
         const [result] = await Promise.race([ocr.predict(imageBlobs[i], {textDetLimitSideLen:1536, textDetLimitType:'max'}), failed]);
         if (run !== token) return [];
         results.push(result.items.map(item => item.text).join('\n'));
@@ -170,13 +181,13 @@
       return results;
     } finally {
       worker?.terminate();
-      if (ocrWorker === worker) ocrWorker = null;
+      if (engineWorker === worker) engineWorker = null;
     }
   }
   $('reader-extract').addEventListener('click', async () => {
     if (!imageBlobs.length) return;
     const run = ++token; busy = true; controls(); resetAudio();
-    if (AI_OCR_URL) {
+    if (TOOLS_API_URL) {
       try {
         const results = [];
         for (let i = 0; i < imageBlobs.length; i++) {
@@ -188,20 +199,21 @@
         return;
       } catch (error) {
         if (run !== token) return;
-        report('Claude could not read a photo (' + error.message + '). Trying on-device OCR…');
+        if (error.status === 401) { session = null; sessionStorage.removeItem('tools-session'); renderAuth(); controls(); finish('Your sign-in has expired. Sign in again to continue.'); return; }
+        report('Claude could not process a photo (' + error.message + '). Switching to the on-device engine…');
       }
     }
     try {
-      const results = await extractWithPaddle(run);
+      const results = await extractOnDevice(run);
       if (run !== token) return;
-      showExtracted(results, 'PaddleOCR');
+      showExtracted(results, 'the on-device engine');
     } catch (error) {
       if (run === token) finish('Could not read the photos: ' + error.message);
     }
   });
   async function speakOnServer(content) {
-    const response = await fetch(AI_OCR_URL + '/speak', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ text: content, voice: $('reader-voice').value, speed: Number($('reader-speed').value) }) });
-    if (!response.ok) throw Error('server ' + response.status);
+    const response = await fetch(TOOLS_API_URL + '/speak', { method: 'POST', headers: {'Content-Type': 'application/json', ...authHeaders()}, body: JSON.stringify({ text: content, voice: $('reader-voice').value, speed: Number($('reader-speed').value) }) });
+    if (!response.ok) throw Object.assign(Error('server ' + response.status), { status: response.status });
     const blob = await response.blob();
     if (!blob.size) throw Error('empty audio');
     return blob;
@@ -227,7 +239,7 @@
   $('reader-speak').addEventListener('click', async () => {
     const content = text.value.trim(); if (!content || content.length > MAX_TEXT) return;
     if (engine.value === 'device') { startDevice(content); return; }
-    if (AI_OCR_URL) {
+    if (TOOLS_API_URL) {
       busy = true; controls(); resetAudio(); report('Creating narration on the home voice server…');
       try {
         const blob = await speakOnServer(content);
@@ -235,7 +247,8 @@
         download.download = (suggestedName || 'narration') + '.wav';
         $('reader-result').hidden = false; finish('Narration ready. Press play to listen, or download the WAV file.');
       } catch (error) {
-        finish('The home voice server is unavailable right now. Try again in a moment.');
+        if (error.status === 401) { session = null; sessionStorage.removeItem('tools-session'); renderAuth(); controls(); finish('Your sign-in has expired. Sign in again to continue.'); }
+        else finish('The home voice server is unavailable right now. Try again in a moment.');
       }
       return;
     }
@@ -243,7 +256,7 @@
   });
   $('reader-stop').addEventListener('click', () => {
     token++; stopDevice(); voiceWorker?.terminate(); voiceWorker = null;
-    ocrWorker?.terminate(); ocrWorker = null;
+    engineWorker?.terminate(); engineWorker = null;
     $('reader-play').textContent = 'Play narration';
     finish('Cancelled. Your image and text are still here.');
   });
@@ -324,11 +337,32 @@
   if (isAppleMobile && 'speechSynthesis' in window) engine.value = 'device';
   updateVoiceOptions();
   window.addEventListener('pagehide', () => {
-    token++; stopDevice(); voiceWorker?.terminate(); ocrWorker?.terminate();
-    voiceWorker = ocrWorker = null; imageBlobs = [];
+    token++; stopDevice(); voiceWorker?.terminate(); engineWorker?.terminate();
+    voiceWorker = engineWorker = null; imageBlobs = [];
     if (imageURL) URL.revokeObjectURL(imageURL);
     resetAudio(); text.value = ''; upload.value = ''; $('reader-camera').value = ''; $('reader-preview').removeAttribute('src'); $('reader-preview').hidden = true;
   });
   window.addEventListener('pageshow', event => { if (event.persisted) { busy = false; controls(); report('Ready for an image or pasted text.'); } });
+
+  // Sign-in: handle the return from GitHub, then check that the saved session is still allowed.
+  const returned = new URLSearchParams(location.hash.slice(1));
+  const signInMessages = { not_allowed: 'Your GitHub account is not on the list of people who can use this tool.', github_failed: 'GitHub sign-in did not finish. Try again.', no_code: 'GitHub sign-in was cancelled. Try again.' };
+  if (returned.get('session')) { session = returned.get('session'); sessionStorage.setItem('tools-session', session); }
+  if (location.hash) history.replaceState(null, '', location.pathname + location.search);
+  $('reader-signin-button').addEventListener('click', () => {
+    location.href = TOOLS_API_URL + '/auth/login?return=' + encodeURIComponent(location.origin + location.pathname + location.search);
+  });
+  $('reader-signout').addEventListener('click', () => {
+    session = null; signedInAs = ''; sessionStorage.removeItem('tools-session');
+    renderAuth(); controls(); report('Signed out.');
+  });
+  if (returned.get('error')) { $('reader-signin-status').hidden = false; $('reader-signin-status').textContent = signInMessages[returned.get('error')] || 'Sign-in did not work. Try again.'; }
+  if (session) {
+    fetch(TOOLS_API_URL + '/auth/me', { headers: authHeaders() }).then(async response => {
+      if (response.ok) signedInAs = (await response.json()).login;
+      else { session = null; sessionStorage.removeItem('tools-session'); $('reader-signin-status').hidden = false; $('reader-signin-status').textContent = 'Please sign in again.'; }
+    }).catch(() => {}).finally(() => { renderAuth(); controls(); });
+  }
+  renderAuth();
   controls();
 })();
