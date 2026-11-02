@@ -238,6 +238,40 @@ async function handleText(request, env, headers) {
   return json({ text }, 200, headers);
 }
 
+// ---- Access management (owner only) ----
+async function readList(env) {
+  if (!env.USERS) return [];
+  try {
+    const list = JSON.parse((await env.USERS.get('allowed')) || '[]');
+    return [...new Set(list.map(name => String(name).toLowerCase()))];
+  } catch (error) { return []; }
+}
+const VALID_LOGIN = /^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/;
+
+async function handleAdmin(request, env, headers) {
+  const login = await currentUser(request, env);
+  if (!login || login.toLowerCase() !== ownerLogin(env)) return json({ error: 'Only the owner can manage access.' }, 403, headers);
+
+  const list = await readList(env);
+  if (request.method === 'GET') return json({ users: list }, 200, headers);
+
+  const body = await request.json().catch(() => null);
+  if (!body) return json({ error: 'Missing request body' }, 400, headers);
+  let next = [...list];
+  if (body.add) {
+    const name = String(body.add).trim().toLowerCase();
+    if (!VALID_LOGIN.test(name)) return json({ error: 'That is not a valid GitHub username.' }, 400, headers);
+    if (!next.includes(name)) next.push(name);
+  }
+  if (body.remove) {
+    const name = String(body.remove).trim().toLowerCase();
+    next = next.filter(item => item !== name);
+  }
+  if (!env.USERS) return json({ error: 'The access list is not set up yet.' }, 500, headers);
+  await env.USERS.put('allowed', JSON.stringify(next));
+  return json({ users: next }, 200, headers);
+}
+
 export default {
   async fetch(request, env) {
     const origin = request.headers.get('Origin') || '';
@@ -246,6 +280,10 @@ export default {
 
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers });
     if (url.pathname.startsWith('/auth/') && request.method === 'GET') return handleAuth(url, request, env, headers);
+    if (url.pathname === '/admin/users' && (request.method === 'GET' || request.method === 'POST')) {
+      if (!ALLOWED_ORIGINS.includes(origin)) return json({ error: 'Origin not allowed' }, 403, headers);
+      return handleAdmin(request, env, headers);
+    }
     if (request.method !== 'POST') return json({ error: 'Method not allowed' }, 405, headers);
     if (!ALLOWED_ORIGINS.includes(origin)) return json({ error: 'Origin not allowed' }, 403, headers);
 

@@ -73,6 +73,15 @@
 <span class="tool-entry-description">Extract text from an image and listen to natural narration. You can also paste your own text.</span>
 <span class="tool-entry-footer">English · Private processing <span>Open tool →</span></span>
 </button>
+</div>
+<section id="access-panel" class="access-panel" hidden aria-labelledby="access-title">
+<div class="eyebrow">OWNER</div>
+<h3 id="access-title">Who can use the tools</h3>
+<p class="muted">Add a GitHub username to give access, or remove one to take it away. Changes apply right away. Your own account always has access.</p>
+<form id="access-form" class="access-form"><input id="access-input" type="text" placeholder="GitHub username" autocomplete="off" maxlength="39" aria-label="GitHub username"><button class="reader-secondary" type="submit">Add person</button></form>
+<ul id="access-list" class="access-list"></ul>
+<p id="access-status" class="muted" role="status" hidden></p>
+</section>
 </div></div>
 <div id="tools-reader-detail" hidden>
 <button class="reader-link tools-back" id="tools-back">← All tools</button>
@@ -113,5 +122,6 @@ if (window.location.hostname === 'mshadkhah.github.io') {
 }
 </script>
 <script src="flow.js?v=7"></script>
-<script src="tools/reader.js?v=5"></script>
+<script src="tools/reader.js?v=6"></script>
+<script src="tools/access.js?v=1"></script>
 </body></html>
