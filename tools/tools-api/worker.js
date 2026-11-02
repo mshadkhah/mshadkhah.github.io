@@ -98,6 +98,9 @@ function isAllowedReturn(address) {
 }
 async function handleAuth(url, request, env, headers) {
   const callback = url.origin + '/auth/callback';
+  if (!env.GITHUB_CLIENT_ID || !env.GITHUB_CLIENT_SECRET || !env.SESSION_SECRET) {
+    return json({ error: 'Sign-in is not set up yet: GitHub client ID, GitHub client secret, and session secret are required.' }, 500, headers);
+  }
 
   if (url.pathname === '/auth/login') {
     const returnTo = url.searchParams.get('return') || '';
@@ -272,8 +275,7 @@ async function handleAdmin(request, env, headers) {
   return json({ users: next }, 200, headers);
 }
 
-export default {
-  async fetch(request, env) {
+async function route(request, env) {
     const origin = request.headers.get('Origin') || '';
     const headers = corsHeaders(origin);
     const url = new URL(request.url);
@@ -293,5 +295,14 @@ export default {
     if (url.pathname === '/speak') return handleSpeak(request, env, headers);
     if (url.pathname === '/name') return handleName(request, env, headers);
     return handleText(request, env, headers);
+}
+
+export default {
+  async fetch(request, env) {
+    try {
+      return await route(request, env);
+    } catch (error) {
+      return json({ error: 'Tools service error: ' + error.message }, 500, corsHeaders(request.headers.get('Origin') || ''));
+    }
   }
 };

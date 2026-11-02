@@ -5,7 +5,18 @@ compatibility_date = "2026-01-01"
 [vars]
 # Public HTTPS address of the Kokoro server on the home machine (Tailscale Funnel). Not secret.
 KOKORO_URL = "https://spark-6082.taild8f391.ts.net"
+# GitHub OAuth app client ID. Not secret.
+GITHUB_CLIENT_ID = "Ov23lipPkfkTQevH8sYg"
+# The GitHub username of the owner, who can always use the tools and manage access.
+OWNER_LOGIN = "mshadkhah"
+
+# Allowed-people list (created with `npx wrangler kv namespace create USERS`).
+[[kv_namespaces]]
+binding = "USERS"
+id = "c1a22317e4e54fcaae1e2b47da988701"
 
 # Set secrets once from this folder, never in this file:
 #   npx wrangler secret put ANTHROPIC_API_KEY
 #   npx wrangler secret put KOKORO_TOKEN
+#   npx wrangler secret put GITHUB_CLIENT_SECRET
+#   npx wrangler secret put SESSION_SECRET
